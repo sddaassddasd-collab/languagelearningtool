@@ -391,7 +391,7 @@
 
 <script>
 /* ========= ✅ 換成你的 Apps Script Web App URL ========= */
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxIygrKawetxQAMNl3rlwdgMZ590aZbUgJlaxA9m5qN_rr_arxmzaosIl01Ps6DQ3MK/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyo3LWQPC-XOdEmslQoIbFrrF4vbZ1egyAKMmUixVgsRP7RQ8ebnRn2WqL6h7cubQwJyQ/exec';
 
 /* ========= 小工具 ========= */
 const $ = s => document.querySelector(s);
@@ -1124,65 +1124,44 @@ function importCSVFile(file){
 
 
 /* ========= OpenAI 內容生成（保留既有三種類型） ========= */
-async function doChat({ provider, apiKey, model, messages, temperature = 0.7 }) {
+async function doChat({ provider, apiKey, model, messages, temperature=0.7 }) {
   const p = (provider || 'openai');
   const m = model && model.trim();
-
-  // === 1) Grok 維持直連（不變） ===
-  if (p === 'grok') {
-  const key = apiKey || loadGrokKey();
-  if (!key) throw new Error('請先填入 Grok API Key');
-  const useModel = m || 'grok-4';
-
-  const resp = await fetch(WEB_APP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' }, // 跟後端的 JSON 解析相配
-    body: JSON.stringify({
-      provider: 'grok',
-      key,
-      model: useModel,
-      messages,
-      temperature
-    })
-  });
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => resp.status);
-    throw new Error('Grok 代理失敗：' + msg);
+  if(p === 'grok'){
+    const key = apiKey || loadGrokKey();
+    if(!key) throw new Error('請先填入 Grok API Key');
+    const useModel = m || 'grok-4'; // 若報錯可改 'grok-4-fast' 或退回 'grok-2-latest'
+    const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: useModel, messages, temperature })
+    });
+    if(!resp.ok){
+      const msg = await resp.text().catch(()=>resp.status);
+      throw new Error('Grok 失敗：' + msg);
+    }
+    const data = await resp.json();
+    return (data.choices?.[0]?.message?.content || '').trim();
   }
-  const data = await resp.json();
-  return (data.choices?.[0]?.message?.content || '').trim();
-}
 
-
-  // === 2) OpenAI → 走你的 Apps Script Proxy ===
+  // default: OpenAI
   {
     const key = apiKey || loadOpenAIKey();
-    if (!key) throw new Error('請先填入 OpenAI API Key');
+    if(!key) throw new Error('請先填入 OpenAI API Key');
     const useModel = m || 'gpt-4o-mini';
-
-    // 重點：改成打你自己的 WEB_APP_URL（Apps Script）
-    // 為了少踩 CORS，這裡用 text/plain 傳字串化 JSON（你的 Apps Script 也已支援）
-    const resp = await fetch(WEB_APP_URL, {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({
-        key,
-        model: useModel,
-        messages,
-        temperature
-      })
+      headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: useModel, messages, temperature })
     });
-
-    // Apps Script 會帶正確 CORS；這裡就可直接讀 JSON
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => resp.status);
-      throw new Error('OpenAI 代理失敗：' + msg);
+    if(!resp.ok){
+      const msg = await resp.text().catch(()=>resp.status);
+      throw new Error('OpenAI 失敗：' + msg);
     }
     const data = await resp.json();
     return (data.choices?.[0]?.message?.content || '').trim();
   }
 }
-
 
 const OPENAI_KEY_STORAGE = 'word-noter.openai.key';
 const GROK_KEY_STORAGE = 'word-noter.grok.key';
