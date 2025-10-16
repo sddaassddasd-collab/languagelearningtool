@@ -683,46 +683,22 @@ function compile(){
 
 }
 
-/* ========= 字典查詢：英用 API；德用生成 ========= */
-async function lookupDefinition(word){
-  // --- 1) 先試 dictionaryapi.dev ---
-  if(getLang() !== 'de'){
-    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
-    try{
-      const res = await fetch(url, { method:'GET' });
-      if(res.ok){
-        const data = await res.json();
-        if(Array.isArray(data) && data.length){
-          const entry = data[0];
-          const phon = (entry.phonetic || (entry.phonetics?.find(p=>p.text)?.text) || '') || '';
-          const meanings = (entry.meanings||[]).flatMap(m=>{
-            const pos = m.partOfSpeech || '';
-            return (m.definitions||[]).slice(0,3).map(d=>({ pos, def: d.definition||'', ex: d.example||'' }));
-          }).slice(0,5);
-          if(meanings.length){
-            return {
-              phon,
-              pos: meanings.map(m=>m.pos).filter(Boolean).slice(0,2).join(', '),
-              defs: meanings.map(m=> (m.ex ? `${m.def} <span class="help">（例：${m.ex}）</span>` : m.def ))
-            };
-          }
-        }
-      }
-      // 若 HTTP 非 200 或資料空，落到備援
-    }catch{/* 掉到備援 */}
-  }
+/* ========= 字典查詢：改為「純生成」 ========= */
+/* BEGIN: paste this whole block */
 
-  // --- 2) 備援：用模型生成精簡詞條（會使用當前 provider 與金鑰） ---
-  try{
-    const provider = getSelectedProvider();
-    const model = getSelectedModel();
-    const apiKey = (provider === 'grok')
-      ? (document.getElementById('grokKey').value.trim() || loadGrokKey())
-      : (document.getElementById('openaiKey').value.trim() || loadOpenAIKey());
-    if(!apiKey) throw new Error('no-key');
+async function generateEnglishEntry(word){
+  const provider = getSelectedProvider();
+  const model = getSelectedModel();
+  const apiKey = (provider === 'grok')
+    ? (document.getElementById('grokKey').value.trim() || loadGrokKey())
+    : (document.getElementById('openaiKey').value.trim() || loadOpenAIKey());
 
-    const system = 'You are a concise English lexicographer. Reply in Traditional Chinese.';
-    const user = `請用條列回覆單字「${word}」的精簡詞條（不要多餘說明）：
+  // 若沒金鑰就回 null，UI 會顯示「離線提示」
+  if(!apiKey) return null;
+
+  const system = 'You are a concise English lexicographer. Reply in Traditional Chinese.';
+  const user = `請用條列回覆單字「${word}」的精簡詞條（不要多餘說明）：
+- 中文意思
 - 詞性（英文縮寫，如 n., v., adj.；若多義可列最多二個）
 - 音標（若不確定可略）
 - 2–3 條核心義項（英文解釋，並附一個英文例句＋簡短中譯）
@@ -733,31 +709,38 @@ async function lookupDefinition(word){
 1) ...（例：...｜譯：...）
 2) ...（例：...｜譯：...）`;
 
-    const txt = await doChat({
-      provider, apiKey, model,
-      messages: [{role:'system',content:system},{role:'user',content:user}],
-      temperature: 0.3
-    });
+  const txt = await doChat({
+    provider, apiKey, model,
+    messages: [{role:'system',content:system},{role:'user',content:user}],
+    temperature: 0.3
+  });
 
-    // 簡單把模型輸出轉成你的 defs 陣列
-    const lines = (txt||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
-    let pos = '', phon = '';
-    const defs = [];
-    for(const ln of lines){
-      if(/^詞性[:：]/.test(ln)) pos = ln.replace(/^詞性[:：]\s*/,'').trim();
-      else if(/^音標[:：]/.test(ln)) phon = ln.replace(/^音標[:：]\s*/,'').trim().replace(/^\/|\/$/g,'');
-      else if(/^義項[:：]/.test(ln)) { /* 標題行，略過 */ }
-      else defs.push(ln);
-    }
-    if(defs.length){
-      return { phon, pos, defs: defs.slice(0,5) };
-    }
-  }catch{/* 備援也失敗 → 回 null */}
+  if(!txt) return null;
 
-  // --- 3) 全部失敗就回 null，讓 UI 顯示離線提示 ---
-  return null;
+  // 解析模型輸出 → 與既有 UI 結構相容
+  const lines = txt.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  let pos = '', phon = '';
+  const defs = [];
+  for(const ln of lines){
+    if(/^詞性[:：]/.test(ln)) pos  = ln.replace(/^詞性[:：]\s*/,'').trim();
+    else if(/^音標[:：]/.test(ln)) phon = ln.replace(/^音標[:：]\s*/,'').trim().replace(/^\/|\/$/g,'');
+    else if(/^義項[:：]/.test(ln)) { /* 標題行略過 */ }
+    else defs.push(ln);
+  }
+  if(!defs.length) return null;
+  return { phon, pos, defs: defs.slice(0,5) };
 }
 
+async function lookupDefinition(word){
+  // 純生成：英文走 generateEnglishEntry；德文走既有的 generateGermanEntry（下面那一段）
+  if(getLang() === 'de'){
+    return await generateGermanEntry(word);
+  }else{
+    return await generateEnglishEntry(word);
+  }
+}
+
+/* END: paste this whole block */
 
 /* === 生成德文字典（基本） === */
 async function generateGermanEntry(word){
