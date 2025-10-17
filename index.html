@@ -77,6 +77,23 @@
     0%   { transform: scale(1.06) }
     100% { transform: scale(1.00) }
   }
+/* === 立即回饋：按下就有觸感/外環（不影響單/雙擊判斷） === */
+.reader .word.tapping {
+  transform: scale(1.04);
+  transition: transform .08s ease;
+}
+.reader .word.tapping::after{
+  content:"";
+  position:absolute;
+  inset:-4px;
+  border-radius:8px;
+  pointer-events:none;
+  box-shadow: 0 0 0 0 rgba(56,189,248,.55);
+  animation: ringPulse .45s ease-out forwards;
+  z-index:1;
+}
+/* 可選：按住時的微縮放 */
+.reader .word:active { transform: scale(1.03) }
 
 
   .reader{ padding-bottom: 72px; } 
@@ -731,10 +748,12 @@ function compile(){
   reader.innerHTML = html;
 
   // 綁定字事件
-  $$('.reader .word').forEach(el=>{
-    el.addEventListener('click', onWordClickHandler);
-    el.addEventListener('dblclick', onWordDblClickHandler);
-  });
+$$('.reader .word').forEach(el=>{
+  el.addEventListener('pointerdown', onWordPointerDown); // ★ 新增：按下立即回饋
+  el.addEventListener('click', onWordClickHandler);
+  el.addEventListener('dblclick', onWordDblClickHandler);
+});
+
 
   // 播放單段事件
   reader.removeEventListener('click', segPlayHandler);
@@ -924,20 +943,26 @@ async function generateGermanMore(word){
 function onWordClickHandler(e){
   const el = e.currentTarget;
   if (el._clickTimer) clearTimeout(el._clickTimer);
-  el._clickTimer = setTimeout(()=>{ processSingleClick(el); el._clickTimer=null; }, 250);
+  el._clickTimer = setTimeout(()=>{ processSingleClick(el); el._clickTimer=null; }, 200);
 }
 function onWordDblClickHandler(e){
   const el = e.currentTarget;
   if (el._clickTimer){ clearTimeout(el._clickTimer); el._clickTimer=null; }
+  el.classList.remove('tapping'); // ★ 新增：避免殘留即時回饋樣式
   processDoubleClick(el);
 }
+
+/* === 立刻回饋：按下就先出動畫（與單/雙擊邏輯分離） === */
+function onWordPointerDown(e){
+  const el = e.currentTarget;
+  el.classList.add('tapping');
+  setTimeout(()=> el.classList.remove('tapping'), 320);
+}
+  
+  
 async function processSingleClick(el){
   const display = el.dataset.w;
   const word = toLowerAlpha(display);
-
-  // ✅ 立即給使用者「有點到」的回饋（更明顯：外環＋彈跳）
-  el.classList.add('clicked');
-  setTimeout(()=> el.classList.remove('clicked'), 700);
 
   // 若這個字之前被雙擊扣分成「紅色」：第一次點擊改為「取消紅色」並恢復高頻框；就先結束（維持你原本邏輯）
   const anyDeducted = $$('.reader .word').some(node =>
