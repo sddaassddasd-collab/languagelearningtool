@@ -40,6 +40,17 @@
   }
   .reader .word{cursor:pointer;padding:1px 2px;border-radius:6px;transition:background .15s, outline-color .15s}
   .reader .word:hover{background:rgba(255,255,255,.06)}
+  /* 點擊回饋：藍色微光閃一下，無論是藍框/綠框都看得到 */
+@keyframes clickFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(56,189,248,.0), inset 0 0 0 0 rgba(56,189,248,.00); }
+  25%  { box-shadow: 0 0 0 6px rgba(56,189,248,.25), inset 0 0 0 9999px rgba(56,189,248,.07); }
+  100% { box-shadow: 0 0 0 0 rgba(56,189,248,.0), inset 0 0 0 0 rgba(56,189,248,.00); }
+}
+.reader .word.clicked {
+  animation: clickFlash .35s ease-out;
+  border-radius: 6px; /* 讓內發光更柔和 */
+}
+
   .reader{ padding-bottom: 72px; } 
 
   /* 段落容器與左側播放鈕（生成語音後才插入 .playseg） */
@@ -683,6 +694,61 @@ function compile(){
 
 }
 
+/* === 單字卡：先顯示骨架，再等結果回填 === */
+function showWordCardSkeleton(display, word){
+  card.style.display = 'block';
+  resetWordQ();
+  cardTitle.innerHTML =
+    `<span class="badge">查詢</span> <strong style="font-size:18px">${display}</strong>`;
+  cardMeta.textContent = '';         // 詞性先空著
+  offlineTip.style.display = 'none'; // 先不顯示離線
+
+  // 先出一條「載入中…」避免空白
+  defsBox.innerHTML = `<li style="color:#94a3b8">載入中⋯</li>`;
+}
+
+/* === 取得定義後，統一回填到卡片與本機儲存 === */
+function updateWordCardFromInfo(display, word, info){
+  if(!info){
+    defsBox.innerHTML = `<li>（離線或查無結果，請自行補充備註作為臨時解釋。）</li>`;
+    offlineTip.style.display = 'block';
+    return;
+  }
+  // 更新標題與欄位
+  cardTitle.innerHTML =
+    `<span class="badge">查詢</span> <strong style="font-size:18px">${display}</strong>` +
+    (info?.phon ? `<span class="phon">/${info.phon}/</span>` : '');
+  cardMeta.textContent = info?.pos ? `詞性：${info.pos}` : '';
+
+  // 回填條目
+  defsBox.innerHTML = '';
+  (info.defs||[]).slice(0,5).forEach(d=>{
+    const li = document.createElement('li');
+    li.innerHTML = d;
+    defsBox.appendChild(li);
+  });
+
+  // 存回本機（不再增加點擊次數）
+  upsertWord(word, {
+    display,
+    pos: info.pos || '',
+    phon: info.phon || '',
+    defs: info.defs ? info.defs.slice(0,3) : []
+  }, false);
+
+  // 傳到 Sheet（英文才送；與你原本一致）
+  if(getLang() !== 'de'){
+    const row = getWord(word);
+    postToSheet({
+      lang: getLang(),
+      word: row.word, display: row.display||word, pos: row.pos||'', phon: row.phon||'',
+      defs: row.defs||[], note: row.note||'', count: row.count||1,
+      pageUrl: location.href, userAgent: navigator.userAgent
+    });
+  }
+}
+
+  
 /* ========= 字典查詢：改為「純生成」 ========= */
 /* BEGIN: paste this whole block */
 
@@ -819,6 +885,11 @@ async function processSingleClick(el){
   const display = el.dataset.w;
   const word = toLowerAlpha(display);
 
+  // ✅ 立即給使用者「有點到」的回饋（藍色微光）
+  el.classList.add('clicked');
+  setTimeout(()=> el.classList.remove('clicked'), 380);
+
+  // 若這個字之前被雙擊扣分成「紅色」：第一次點擊改為「取消紅色」並恢復高頻框；就先結束（維持你原本邏輯）
   const anyDeducted = $$('.reader .word').some(node =>
     toLowerAlpha(node.dataset.w) === word && node.classList.contains('deducted')
   );
@@ -832,84 +903,78 @@ async function processSingleClick(el){
     return;
   }
 
+  // ✅ 先把卡片打開（骨架 UI），讓使用者不用等
+  showWordCardSkeleton(display, word);
+
+  // 記一次點擊（維持你原本：單擊會 +1）
   upsertWord(word, { display }, true);
+  applyHFClassesToReader(); // 更新藍/綠框
 
-  const info = await lookupDefinition(word);
-card.style.display = 'block';
-resetWordQ();
-cardTitle.innerHTML = `<span class="badge">查詢</span> <strong style="font-size:18px">${display}</strong>` +
-                      (info?.phon ? `<span class="phon">/${info.phon}/</span>` : '');
-cardMeta.textContent = info?.pos ? `詞性：${info.pos}` : '';
-defsBox.innerHTML = '';
-offlineTip.style.display = info ? 'none' : 'block';
+  try{
+    // ✅ 背景去生成字典（英文/德文各自走你原本的 lookupDefinition）
+    const info = await lookupDefinition(word);
 
-/* --- 語言別呈現 --- */
-if(getLang() === 'de'){
-  // 1) 先把基本欄位每行當作 defs 顯示
-  if(info && info.defs?.length){
-    // 與英文一致：只更新欄位，不額外加次數
-    upsertWord(word, { display, pos: info.pos, phon: info.phon, defs: info.defs }, false);
-    info.defs.forEach(d=>{ const li=document.createElement('li'); li.innerHTML=d; defsBox.appendChild(li); });
-  }else{
-    const li = document.createElement('li'); li.textContent = '（離線或生成失敗）'; defsBox.appendChild(li);
-  }
+    // 德文需要「更多」按鈕的那塊，你原本在 processSingleClick 裡有分流
+    if(getLang() === 'de'){
+      // 回填基本欄位
+      if(info && info.defs?.length){
+        updateWordCardFromInfo(display, word, info);
+      }else{
+        defsBox.innerHTML = '<li>（離線或生成失敗）</li>';
+        offlineTip.style.display = 'block';
+      }
 
-  // 2) 加入「更多」按鈕（點擊才生成）
-  let moreBtn = document.getElementById('deMoreBtn');
-  if(moreBtn) moreBtn.remove();
-  moreBtn = document.createElement('button');
-  moreBtn.id = 'deMoreBtn';
-  moreBtn.className = 'secondary';
-  moreBtn.style.marginTop = '8px';
-  moreBtn.textContent = '更多';
-  const contentBox = card.querySelector('.content');
-  contentBox.appendChild(moreBtn);
+      // ==== 保留你原本的「德文更多」按鈕行為 ====
+      let moreBtn = document.getElementById('deMoreBtn');
+      if(moreBtn) moreBtn.remove();
+      moreBtn = document.createElement('button');
+      moreBtn.id = 'deMoreBtn';
+      moreBtn.className = 'secondary';
+      moreBtn.style.marginTop = '8px';
+      moreBtn.textContent = '更多';
+      const contentBox = card.querySelector('.content');
+      contentBox.appendChild(moreBtn);
 
-  // 承載更多內容的容器
-  let moreBox = document.getElementById('deMoreBox');
-  if(!moreBox){
-    moreBox = document.createElement('div');
-    moreBox.id = 'deMoreBox';
-    moreBox.className = 'zh';
-    moreBox.style.marginTop = '8px';
-    contentBox.appendChild(moreBox);
-  }else{
-    moreBox.innerHTML = '';
-  }
+      let moreBox = document.getElementById('deMoreBox');
+      if(!moreBox){
+        moreBox = document.createElement('div');
+        moreBox.id = 'deMoreBox';
+        moreBox.className = 'zh';
+        moreBox.style.marginTop = '8px';
+        contentBox.appendChild(moreBox);
+      }else{
+        moreBox.innerHTML = '';
+      }
 
-  moreBtn.onclick = async ()=>{
-    try{
-      moreBtn.disabled = true; const old = moreBtn.textContent; moreBtn.textContent='生成中…';
-      const extra = await generateGermanMore(display);
-      moreBox.innerHTML = `
+      moreBtn.onclick = async ()=>{
+        try{
+          moreBtn.disabled = true; const old = moreBtn.textContent; moreBtn.textContent='生成中…';
+          const extra = await generateGermanMore(display);
+          moreBox.innerHTML = `
 <div style="border-top:1px solid var(--border); margin-top:8px; padding-top:8px">
   ${extra.more.replace(/\n/g,'<br>')}
 </div>`;
-      moreBtn.remove(); // 只生一次
-    }catch(err){
-      moreBox.textContent = '（生成失敗：' + err.message + '）';
-      moreBtn.disabled = false; moreBtn.textContent='更多';
+          moreBtn.remove();
+        }catch(err){
+          moreBox.textContent = '（生成失敗：' + err.message + '）';
+          moreBtn.disabled = false; moreBtn.textContent='更多';
+        }
+      };
+      // ==== 德文分流結束 ====
+    }else{
+      // 英文：直接回填
+      updateWordCardFromInfo(display, word, info);
+      // 確保沒有殘留的德文「更多」UI
+      const moreBtn = document.getElementById('deMoreBtn'); if(moreBtn) moreBtn.remove();
+      const moreBox = document.getElementById('deMoreBox'); if(moreBox) moreBox.remove();
     }
-  };
-  }else{
-  // 英文：沿用你原本的呈現
-  if(info && info.defs?.length){
-    upsertWord(word, { display, pos: info.pos, phon: info.phon, defs: info.defs.slice(0,3) }, false);
-    const row = getWord(word);
-    postToSheet({
-      lang: getLang(),
-      word: row.word, display: row.display||word, pos: row.pos||'', phon: row.phon||'',
-      defs: row.defs||[], note: row.note||'', count: row.count||1, pageUrl: location.href, userAgent: navigator.userAgent
-    });
-    info.defs.forEach(d=>{ const li=document.createElement('li'); li.innerHTML=d; defsBox.appendChild(li); });
-  }else{
-    const li = document.createElement('li'); li.textContent = '（離線或查無結果，請自行補充備註作為臨時解釋。）'; defsBox.appendChild(li);
-  }
-  // 刪掉可能殘留的德文「更多」元件
-  const moreBtn = document.getElementById('deMoreBtn'); if(moreBtn) moreBtn.remove();
-  const moreBox = document.getElementById('deMoreBox'); if(moreBox) moreBox.remove();
+  }catch(err){
+    // 失敗也給明確訊息
+    defsBox.innerHTML = `<li>（查詢失敗：${(err&&err.message)||'未知錯誤'}）</li>`;
+    offlineTip.style.display = 'block';
   }
 }
+
 function processDoubleClick(el){
   const display = el.dataset.w;
   const word = toLowerAlpha(display);
