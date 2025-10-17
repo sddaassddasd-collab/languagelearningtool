@@ -250,6 +250,7 @@
           </label>
 
           <button id="resetWords" class="danger">清空生字本</button>
+          <button id="toggleDict" class="secondary" title="點一下關閉字典卡">字典：開</button>
         </div>
 
         <!-- 生成內容（前端直呼 OpenAI） -->
@@ -404,6 +405,27 @@
 /* ========= ✅ 換成你的 Apps Script Web App URL ========= */
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyo3LWQPC-XOdEmslQoIbFrrF4vbZ1egyAKMmUixVgsRP7RQ8ebnRn2WqL6h7cubQwJyQ/exec';
 
+// ===== 字典開關（存本機 localStorage） =====
+const DICT_OFF_KEY = 'word-noter.dict.off'; // '1' 表關、'0' 或缺值表開
+function isDictOff(){
+  try{ return localStorage.getItem(DICT_OFF_KEY) === '1'; }catch{ return false; }
+}
+function setDictOff(v){
+  try{ localStorage.setItem(DICT_OFF_KEY, v ? '1' : '0'); }catch{}
+}
+function updateDictToggleUI(){
+  const btn = document.getElementById('toggleDict');
+  if(!btn) return;
+  if(isDictOff()){
+    btn.textContent = '字典：關';
+    btn.title = '點一下開啟字典卡';
+  }else{
+    btn.textContent = '字典：開';
+    btn.title = '點一下關閉字典卡';
+  }
+}
+
+  
 /* ========= 小工具 ========= */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -903,12 +925,20 @@ async function processSingleClick(el){
     return;
   }
 
-  // ✅ 先把卡片打開（骨架 UI），讓使用者不用等
+    // 如果使用者關掉字典：只做點擊回饋與計次，不開卡、不查字典
+  if(isDictOff()){
+    upsertWord(word, { display }, true);   // 照常 +1 次數
+    applyHFClassesToReader();              // 藍/綠框照常更新
+    return;                                // 結束，不開啟字典卡
+  }
+
+  // ✅ 字典是開啟狀態：先把卡片打開骨架，再去查
   showWordCardSkeleton(display, word);
 
   // 記一次點擊（維持你原本：單擊會 +1）
   upsertWord(word, { display }, true);
   applyHFClassesToReader(); // 更新藍/綠框
+
 
   try{
     // ✅ 背景去生成字典（英文/德文各自走你原本的 lookupDefinition）
@@ -2013,6 +2043,16 @@ Language evolves; words adapt, meanings shift, and our interpretations blossom.`
   renderWordList();
   applyHFClassesToReader();
   });
+    // ===== 字典開關按鈕 =====
+  const dictBtn = document.getElementById('toggleDict');
+  if(dictBtn){
+    updateDictToggleUI(); // 進頁就刷新一次顯示
+    dictBtn.addEventListener('click', ()=>{
+      setDictOff(!isDictOff());
+      updateDictToggleUI();
+    });
+  }
+
 }
 
 function bindExtraQuestionUI(){
